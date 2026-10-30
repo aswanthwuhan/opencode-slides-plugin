@@ -171,6 +171,7 @@ This plugin stands on the work of many people. Thank you to:
   [python-pptx](https://github.com/scanny/python-pptx), [PyMuPDF](https://github.com/pymupdf/PyMuPDF),
   [Bun](https://bun.sh) and [Node.js](https://nodejs.org).
 - **[Anthropic's Claude](https://www.anthropic.com/claude)** — which helped design, write and test this plugin.
+- **Dr. Harshad Ramineni** — for providing access to Claude, which made building this plugin possible.
 
 ## License
 
