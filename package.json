@@ -1,0 +1,33 @@
+{
+  "name": "opencode-slides",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Slide review side panel for the OpenCode desktop app: see each slide, comment on elements, send to the model.",
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/gui.js --format=cjs --target=node --outfile=gui-experimental.cjs --external effect --external solid-js --external solid-js/web --external solid-js/store --external @opencode/plugin/gui --external @opencode/plugin/rpc --external @opencode/schema/rpc --external @opencode/client --external electron --external node:child_process --external node:fs --external node:fs/promises --external node:path --external node:os --external node:crypto",
+    "build:viewer": "bun build viewer/app.jsx --format=iife --target=browser --minify --outfile=dist/viewer.js --external three --external @ai-sdk/react --external ai --external y-websocket --external y-webrtc --define process.env.NODE_ENV='\"production\"'"
+  },
+  "devDependencies": {
+    "pptx-react-viewer": "4.59.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "jszip": "^3.10.1",
+    "fast-xml-parser": "^5.10.1",
+    "i18next": "^26.3.6",
+    "react-i18next": "^17.0.9",
+    "react-icons": "^5.7.0",
+    "lucide-react": "^1.24.0",
+    "framer-motion": "^13.1.1",
+    "jspdf": "^4.2.1",
+    "yjs": "^13.6.32"
+  },
+  "overrides": {
+    "html2canvas-pro": "2.5.4"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aswanthwuhan/opencode-slides-plugin.git"
+  }
+}

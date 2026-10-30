@@ -1,0 +1,302 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>opencode-slides viewer test</title>
+<style>
+  html, body { margin: 0; height: 100%; font: 13px system-ui, sans-serif; }
+  body { display: flex; gap: 12px; padding: 8px; box-sizing: border-box; background: #ddd; }
+  body.dark { background: #222; color: #eee; }
+  #root { width: 440px; flex: none; height: 100%; background: #fff; overflow: hidden; }
+  #side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; height: 100%; }
+  #buttons { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  #buttons .group { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; border: 1px solid #999; border-radius: 4px; }
+  #buttons .group b { font-size: 11px; align-self: center; margin-right: 2px; }
+  #buttons button { padding: 2px 6px; }
+  #log { flex: 1; overflow: auto; margin: 0; padding: 6px; background: rgba(0,0,0,.06); white-space: pre-wrap; font: 12px ui-monospace, monospace; }
+  #thumbs { display: flex; flex-wrap: wrap; gap: 6px; max-height: 30%; overflow: auto; }
+  #thumbs figure { margin: 0; font-size: 11px; }
+  #thumbs img { width: 200px; border: 1px solid #888; display: block; }
+  #status { font-size: 12px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div id="side">
+  <div id="buttons">
+    <div class="group"><b>Capture</b>
+      <button id="cap1">capture current</button>
+      <button id="capAll">capture all</button>
+      <button id="exportPng1">exportPng(active)</button>
+      <button id="exportPngAll">exportPng("all")</button>
+      <button id="exportPdf">exportPdf()</button>
+    </div>
+    <div class="group"><b>History</b>
+      <button id="undo">undo</button>
+      <button id="redo">redo</button>
+      <button id="canUndo">canUndo/canRedo</button>
+    </div>
+    <div class="group"><b>Slides</b>
+      <button id="prev">goTo prev</button>
+      <button id="next">goTo next</button>
+      <button id="addSlide">addSlide</button>
+      <button id="dupSlide">duplicateSlide</button>
+      <button id="delSlide">deleteSlide</button>
+    </div>
+    <div class="group"><b>Insert</b>
+      <button id="insText">insertText</button>
+      <button id="insRect">insertShape rect</button>
+      <button id="insEllipse">insertShape ellipse</button>
+      <button id="insArrow">insertShape arrow</button>
+      <button id="insLine">insertShape line</button>
+      <button id="insImage">insertImage (png)</button>
+      <button id="delSel">deleteSelection</button>
+      <button id="selFirst">select first element</button>
+    </div>
+    <div class="group"><b>Format (selection)</b>
+      <button id="fBold">bold</button>
+      <button id="fItalic">italic</button>
+      <button id="fUnder">underline</button>
+      <button id="fSmaller">A-</button>
+      <button id="fBigger">A+</button>
+      <button id="fRed">color #d62828</button>
+      <button id="fFill">fill #2ECC71</button>
+      <button id="fCenter">align center</button>
+      <button id="fRight">align right</button>
+    </div>
+    <div class="group"><b>Chrome</b>
+      <button id="openMenu">openMenu</button>
+      <button id="closeMenu">closeMenu</button>
+      <button id="present">present</button>
+      <button id="dark">toggle dark</button>
+    </div>
+    <div class="group"><b>Misc</b>
+      <button id="content">getContent</button>
+      <button id="xml">slide XML check</button>
+      <button id="saved">markSaved</button>
+      <button id="reload">load(getContent())</button>
+      <button id="simDownload">simulate anchor download</button>
+      <button id="simPrint">window.print()</button>
+      <button id="state">state</button>
+      <button id="clear">clear log</button>
+    </div>
+  </div>
+  <div id="status"></div>
+  <div id="thumbs"></div>
+  <pre id="log"></pre>
+</div>
+<script>
+  const $ = (id) => document.getElementById(id)
+  const log = (...a) => {
+    const line = a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" ")
+    $("log").textContent = `${new Date().toISOString().slice(11, 23)} ${line}\n` + $("log").textContent
+  }
+  const guard = (fn) => async () => { try { await fn() } catch (e) { log("ERROR", String(e && e.stack || e)) } }
+  let dark = false
+  let lastContent = null
+  let lastDownload = null
+  let boldOn = true, italicOn = true, underOn = true
+
+  function loadScript(src) {
+    return new Promise((res, rej) => {
+      const s = document.createElement("script")
+      s.src = src; s.onload = res; s.onerror = () => rej(new Error("failed to load " + src))
+      document.head.appendChild(s)
+    })
+  }
+
+  function showThumbs(urls, indexes, ms) {
+    $("thumbs").innerHTML = ""
+    urls.forEach((u, k) => {
+      const f = document.createElement("figure")
+      const img = new Image(); img.src = u
+      img.onload = () => (f.lastChild.textContent = `slide ${indexes[k] + 1} · ${img.naturalWidth}x${img.naturalHeight} · ${Math.round(u.length / 1024)} KB`)
+      f.append(img, document.createElement("figcaption"))
+      $("thumbs").append(f)
+    })
+    log(`capture ${JSON.stringify(indexes.map((i) => i + 1))} -> ${urls.length} PNGs in ${ms} ms`)
+  }
+
+  async function capture(indexes) {
+    const t = performance.now()
+    const urls = await SlidesApp.capture(indexes, { width: 1280 })
+    showThumbs(urls, indexes, Math.round(performance.now() - t))
+  }
+
+  function saveBytes(name, bytes, mime) {
+    // Test-only: lets the tester inspect the intercepted/exported bytes via a normal download.
+    const a = document.createElement("a")
+    a.href = URL.createObjectURL(new Blob([bytes], { type: mime }))
+    a.download = name
+    a.click()
+  }
+
+  function makePngBlob() {
+    return new Promise((res) => {
+      const c = document.createElement("canvas")
+      c.width = 800; c.height = 500
+      const g = c.getContext("2d")
+      g.fillStyle = "#4a90d9"; g.fillRect(0, 0, 800, 500)
+      g.fillStyle = "#fff"; g.font = "bold 72px sans-serif"; g.fillText("PNG test", 180, 280)
+      c.toBlob((b) => b.arrayBuffer().then((ab) => res(new Uint8Array(ab))), "image/png")
+    })
+  }
+
+  // Shows the selected element (or first element) and fires a format() call.
+  // `make` is evaluated per click (so toggles flip each time).
+  const fmt = (make, label) => guard(async () => {
+    const patch = make()
+    const ok = await SlidesApp.format(patch)
+    log(`format ${label || JSON.stringify(patch)} ->`, ok)
+  })
+
+  ;(async () => {
+    try {
+      const params = new URLSearchParams(location.search)
+      const deck = params.get("deck") || "../dev/sample.pptx"
+      const t0 = performance.now()
+      await loadScript("../dist/viewer.js")
+      log(`viewer.js loaded in ${Math.round(performance.now() - t0)} ms`)
+      const r = await fetch(deck)
+      if (!r.ok) throw new Error(`fetch ${deck}: ${r.status}`)
+      const bytes = new Uint8Array(await r.arrayBuffer())
+      log(`deck ${deck}: ${bytes.length} bytes`)
+      const t1 = performance.now()
+      SlidesApp.mount($("root"), bytes, {
+        initialSlide: 0,
+        dark,
+        path: params.get("path") || "C:\\decks\\sample.pptx",
+        onReady: (d) => log("onReady", d, `${Math.round(performance.now() - t1)} ms after mount`),
+        onSelection: (items) => log("onSelection", items),
+        onSlide: (i) => log("onSlide", i),
+        onDirty: (d) => log("onDirty", d),
+        onError: (m) => log("onError", m),
+        onSaveRequest: () => log("onSaveRequest"),
+        onHistory: (h) => log("onHistory", h),
+        onDownload: (d) => { lastDownload = d; log("onDownload", { name: d.name, mime: d.mime, bytes: d.bytes.byteLength }) },
+        onPrint: () => log("onPrint"),
+        onMenu: (open) => log("onMenu", open),
+        onPresentChange: (p) => log("onPresentChange", p),
+      })
+      $("status").textContent = "mounted: path=C:\\decks\\sample.pptx (fileName prop from path option)"
+    } catch (e) {
+      log("ERROR", String(e && e.stack || e))
+    }
+  })()
+
+  // ----- capture / export -----
+  $("cap1").onclick = guard(() => capture([SlidesApp.getActiveSlide()]))
+  $("capAll").onclick = guard(() => capture([...Array(SlidesApp.getSlideCount()).keys()]))
+  $("exportPng1").onclick = guard(async () => {
+    const files = await SlidesApp.exportPng(SlidesApp.getActiveSlide())
+    log("exportPng(active) ->", files.map((f) => ({ name: f.name, bytes: f.bytes.byteLength, png: String.fromCharCode(...f.bytes.slice(1, 4)) })))
+    saveBytes(files[0].name, files[0].bytes, "image/png")
+  })
+  $("exportPngAll").onclick = guard(async () => {
+    const t = performance.now()
+    const files = await SlidesApp.exportPng("all")
+    log(`exportPng("all") -> ${files.length} files in ${Math.round(performance.now() - t)} ms`, files.map((f) => `${f.name}:${f.bytes.byteLength}`))
+  })
+  $("exportPdf").onclick = guard(async () => {
+    const t = performance.now()
+    const pdf = await SlidesApp.exportPdf()
+    const head = String.fromCharCode(...pdf.slice(0, 5))
+    const pages = (new TextDecoder("latin1").decode(pdf).match(/\/Type\s*\/Page[^s]/g) || []).length
+    log(`exportPdf -> ${pdf.byteLength} bytes, header "${head}", pages ${pages}, ${Math.round(performance.now() - t)} ms`)
+    saveBytes("slides-test.pdf", pdf, "application/pdf")
+  })
+
+  // ----- history -----
+  $("undo").onclick = guard(() => log("undo ->", SlidesApp.undo()))
+  $("redo").onclick = guard(() => log("redo ->", SlidesApp.redo()))
+  $("canUndo").onclick = guard(() => log("canUndo", SlidesApp.canUndo(), "canRedo", SlidesApp.canRedo()))
+
+  // ----- slides -----
+  $("prev").onclick = guard(() => SlidesApp.goTo(Math.max(0, SlidesApp.getActiveSlide() - 1)))
+  $("next").onclick = guard(() => SlidesApp.goTo(Math.min(SlidesApp.getSlideCount() - 1, SlidesApp.getActiveSlide() + 1)))
+  $("addSlide").onclick = guard(async () => { const r = await SlidesApp.addSlide(); log("addSlide -> new active index", r, "count", SlidesApp.getSlideCount()) })
+  $("dupSlide").onclick = guard(async () => { const r = await SlidesApp.duplicateSlide(); log("duplicateSlide -> active index", r, "count", SlidesApp.getSlideCount()) })
+  $("delSlide").onclick = guard(async () => { const r = await SlidesApp.deleteSlide(); log("deleteSlide ->", r, "count", SlidesApp.getSlideCount()) })
+
+  // ----- insert -----
+  $("insText").onclick = guard(() => log("insertText -> id", SlidesApp.insertText()))
+  $("insRect").onclick = guard(() => log("insertShape(rect) -> id", SlidesApp.insertShape("rect")))
+  $("insEllipse").onclick = guard(() => log("insertShape(ellipse) -> id", SlidesApp.insertShape("ellipse")))
+  $("insArrow").onclick = guard(() => log("insertShape(arrow) -> id", SlidesApp.insertShape("arrow")))
+  $("insLine").onclick = guard(() => log("insertShape(line) -> id", SlidesApp.insertShape("line")))
+  $("insImage").onclick = guard(async () => {
+    const png = await makePngBlob()
+    log("insertImage(png", png.byteLength, "bytes) -> id", await SlidesApp.insertImage(png, "image/png"))
+  })
+  $("delSel").onclick = guard(() => log("deleteSelection ->", SlidesApp.deleteSelection()))
+  $("selFirst").onclick = guard(() => {
+    const h = SlidesApp._handle()
+    const els = h.getElements(SlidesApp.getActiveSlide())
+    if (!els.length) return log("no elements on this slide")
+    h.selectElements([els[els.length - 1].id])
+    log("selected", els[els.length - 1].id, els[els.length - 1].name)
+  })
+
+  // ----- format -----
+  $("fBold").onclick = fmt(() => ({ bold: (boldOn = !boldOn) }), "bold toggle")
+  $("fItalic").onclick = fmt(() => ({ italic: (italicOn = !italicOn) }), "italic toggle")
+  $("fUnder").onclick = fmt(() => ({ underline: (underOn = !underOn) }), "underline toggle")
+  $("fSmaller").onclick = fmt(() => ({ fontSizeDelta: -2 }), "fontSizeDelta -2pt")
+  $("fBigger").onclick = fmt(() => ({ fontSizeDelta: 2 }), "fontSizeDelta +2pt")
+  $("fRed").onclick = fmt(() => ({ color: "#d62828" }), "color #d62828")
+  $("fFill").onclick = fmt(() => ({ fill: "#2ECC71" }), "fill #2ECC71")
+  $("fCenter").onclick = fmt(() => ({ align: "center" }), "align center")
+  $("fRight").onclick = fmt(() => ({ align: "right" }), "align right")
+
+  // ----- chrome -----
+  $("openMenu").onclick = guard(() => log("openMenu ->", SlidesApp.openMenu()))
+  $("closeMenu").onclick = guard(() => log("closeMenu ->", SlidesApp.closeMenu()))
+  $("present").onclick = guard(() => log("present ->", SlidesApp.present()))
+  $("dark").onclick = guard(() => {
+    dark = !dark
+    document.body.classList.toggle("dark", dark)
+    SlidesApp.setDark(dark)
+    log("setDark", dark)
+  })
+
+  // ----- misc -----
+  $("content").onclick = guard(async () => {
+    const t = performance.now()
+    lastContent = await SlidesApp.getContent()
+    log(`getContent: ${lastContent.byteLength} bytes in ${Math.round(performance.now() - t)} ms`)
+  })
+  $("xml").onclick = guard(async () => {
+    if (!window.JSZip) await loadScript("../node_modules/jszip/dist/jszip.min.js")
+    const zip = await JSZip.loadAsync(await SlidesApp.getContent())
+    const idx = SlidesApp.getActiveSlide() + 1
+    const xml = await zip.file(`ppt/slides/slide${idx}.xml`).async("string")
+    const count = (re) => (xml.match(re) || []).length
+    log(`slide${idx}.xml: b="1" x${count(/ b="1"/g)}, i="1" x${count(/ i="1"/g)}, u="sng" x${count(/ u="sng"/g)}, sz= x${count(/ sz="\d+"/g)}, algn="ctr" x${count(/algn="ctr"/g)}, algn="r" x${count(/algn="r"/g)}, prstGeom x${count(/<a:prstGeom/g)}, solidFill x${count(/<a:solidFill>/g)}, pic x${count(/<p:pic>/g)}`)
+    log("last 300 chars of <p:spTree>:", xml.slice(Math.max(0, xml.lastIndexOf("<p:sp>")), Math.max(0, xml.lastIndexOf("<p:sp>")) + 300))
+  })
+  $("saved").onclick = guard(() => { SlidesApp.markSaved(); log("markSaved -> isDirty", SlidesApp.isDirty()) })
+  $("reload").onclick = guard(async () => {
+    const bytes = lastContent || (await SlidesApp.getContent())
+    SlidesApp.load(bytes, { initialSlide: SlidesApp.getActiveSlide() })
+    log(`load(${bytes.byteLength} bytes)`)
+  })
+  $("simDownload").onclick = guard(() => {
+    // Mimics the viewer's File > Export: blob URL + <a download> click. Should reach onDownload, not the browser.
+    const a = document.createElement("a")
+    a.href = URL.createObjectURL(new Blob(["hello"], { type: "text/plain" }))
+    a.download = "sim-export.txt"
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    log("simulated anchor click (expect onDownload sim-export.txt)")
+  })
+  $("simPrint").onclick = guard(() => { window.print(); log("window.print() called (expect onPrint)") })
+  $("state").onclick = guard(() => log("state", {
+    slideCount: SlidesApp.getSlideCount(), active: SlidesApp.getActiveSlide(),
+    dirty: SlidesApp.isDirty(), selection: SlidesApp.getSelection(),
+    canUndo: SlidesApp.canUndo(), canRedo: SlidesApp.canRedo(), lastDownload: lastDownload && lastDownload.name,
+  }))
+  $("clear").onclick = () => ($("log").textContent = "")
+</script>
+</body>
+</html>

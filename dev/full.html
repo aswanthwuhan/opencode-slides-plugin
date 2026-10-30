@@ -1,0 +1,111 @@
+<!doctype html><html><head><meta charset="utf-8"><title>full panel test</title>
+<style>
+html,body{margin:0;height:100%;font:13px system-ui}
+body{background:#eef0f3;color:#222}
+body.dark{background:#16171a;color:#ddd;
+  --v2-bg-base:#262626;--v2-text-base:#e6e6e6;--v2-text-weak:#9a9a9a;--v2-border-base:rgba(255,255,255,.18);--v2-accent:#4f8cf7}
+#bar{display:flex;gap:6px;align-items:center;padding:6px 8px;border-bottom:1px solid #ccc;flex-wrap:wrap}
+#bar button{font:inherit;padding:2px 8px}
+#wrap{display:flex;height:calc(100vh - 40px)}
+#panelbox{flex:none;height:100%;border-right:1px solid #888;background:inherit;position:relative}
+#panel{width:100%;height:100%}
+#log{flex:1;min-width:0;overflow:auto;padding:8px;white-space:pre-wrap;font:11px monospace;margin:0}
+</style></head>
+<body>
+<div id="bar">
+  <span>Panel width:</span>
+  <button id="w360">360 px</button>
+  <button id="w720">720 px</button>
+  <button id="wfill">fill</button>
+  <button id="dark">Toggle dark</button>
+  <button id="changed">External edit (fireChanged)</button>
+  <button id="modelEdit">Simulate model edit on disk</button>
+  <span id="state" class="muted"></span>
+</div>
+<div id="wrap">
+  <div id="panelbox"><div id="panel"></div></div>
+  <pre id="log"></pre>
+</div>
+<script src="../node_modules/jszip/dist/jszip.min.js"></script>
+<script type="module">
+import { createSlidesView } from "../src/view.js"
+
+const logEl = document.getElementById("log")
+const log = (...a) => { logEl.textContent = a.join(" ") + "\n" + logEl.textContent; console.log("[full]", ...a) }
+window.__log = log
+const PATH = "C:/demo/sample.pptx"
+let disk = new Uint8Array(await fetch("sample.pptx").then(r => r.arrayBuffer()))
+const changed = []
+window.__writes = 0
+window.__sent = null
+
+const b64 = (bytes) => { let s = ""; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(s) }
+const download = (name, bytes, mime) => {
+  const url = URL.createObjectURL(new Blob([bytes], { type: mime }))
+  const a = Object.assign(document.createElement("a"), { href: url, download: name })
+  document.body.appendChild(a); a.click(); a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 10000)
+}
+
+const view = createSlidesView({
+  initialPath: PATH,
+  dark: () => document.body.classList.contains("dark"),
+  pickDeck: async () => PATH,
+  readDeck: async () => ({ bytes: disk.slice(), mtime: Date.now() }),
+  writeDeck: async (p, bytes) => { disk = bytes.slice(); window.__writes++; log("WRITE", bytes.length, "bytes"); return { mtime: Date.now() } },
+  loadViewerScript: async () => {
+    const s = await fetch("../dist/viewer.js").then(r => r.text())
+    log("viewer script", s.length, "chars")
+    return s
+  },
+  onChanged: (p, cb) => { changed.push(cb); return () => {} },
+  send: async (req) => {
+    window.__sent = req
+    log("SEND", JSON.stringify({ ...req, images: req.images.map(i => ({ slide: i.slide, uri: i.uri.slice(0, 30) + "… " + i.uri.length })) }, null, 1))
+  },
+  remember: () => {},
+  registerCapture: () => () => {},
+  // Browser fallbacks: download through an anchor; pick through a hidden file input.
+  saveFile: async ({ name, bytes }) => { download(name, bytes, name.endsWith(".pdf") ? "application/pdf" : "image/png"); log("SAVE", name, bytes.length, "bytes"); return { path: name, canceled: false } },
+  openPrint: async ({ name, bytes }) => {
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }))
+    window.open(url, "_blank")
+    log("PRINT", name, bytes.length, "bytes")
+  },
+  pickImage: () => new Promise((resolve) => {
+    const input = Object.assign(document.createElement("input"), { type: "file", accept: "image/*" })
+    input.onchange = async () => {
+      const f = input.files[0]
+      if (!f) return resolve({ name: "", data: "", mime: "" })
+      const bytes = new Uint8Array(await f.arrayBuffer())
+      resolve({ name: f.name, data: b64(bytes), mime: f.type || "image/png" })
+    }
+    input.oncancel = () => resolve({ name: "", data: "", mime: "" })
+    input.click()
+  }),
+})
+document.getElementById("panel").appendChild(view.element)
+window.view = view
+
+const panelbox = document.getElementById("panelbox")
+const setW = (w) => { panelbox.style.width = w ? w + "px" : "50%"; panelbox.style.flex = w ? "none" : "1 1 0" }
+document.getElementById("w360").onclick = () => setW(360)
+document.getElementById("w720").onclick = () => setW(720)
+document.getElementById("wfill").onclick = () => setW(0)
+document.getElementById("dark").onclick = () => document.body.classList.toggle("dark")
+document.getElementById("changed").onclick = () => changed.forEach(cb => cb())
+document.getElementById("modelEdit").onclick = async () => {
+  // Stand-in for the model: rewrite slide 2's XML inside the .pptx on "disk", then the watcher fires.
+  const zip = await JSZip.loadAsync(disk)
+  const name = "ppt/slides/slide2.xml"
+  const xml = await zip.file(name).async("string")
+  const tag = `<!-- model ${Date.now()} -->`
+  zip.file(name, xml.replace("</p:cSld>", tag + "</p:cSld>"))
+  disk = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" })
+  log("model edit: rewrote", name, "on disk")
+  changed.forEach(cb => cb())
+}
+setW(+new URLSearchParams(location.search).get("w") || 360)
+setInterval(() => { document.getElementById("state").textContent = `${panelbox.offsetWidth}px · ${document.body.classList.contains("dark") ? "dark" : "light"}` }, 300)
+</script>
+</body></html>

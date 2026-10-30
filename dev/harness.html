@@ -1,0 +1,309 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>opencode-slides v2 panel harness</title>
+<style>
+  html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; font-size: 13px; }
+  body { display: flex; background: #fff; color: #222; }
+  body.dark { background: #1e1e1e; color: #ddd; }
+  #panel { width: 440px; height: 100vh; flex: none; border-right: 1px solid rgba(127,127,127,.4); resize: horizontal; overflow: hidden; }
+  #side { flex: 1; min-width: 0; padding: 8px; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+  #side .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  pre { white-space: pre-wrap; font-size: 11px; border: 1px solid rgba(127,127,127,.4); padding: 6px; margin: 0; overflow: auto; }
+  #sent { flex: 1; min-height: 120px; }
+  #log { max-height: 180px; }
+  #shots img { width: 160px; border: 1px solid #888; margin: 2px; }
+</style>
+</head>
+<body>
+<div id="panel"></div>
+<div id="side">
+  <div class="row">
+    <button id="dark">Toggle dark</button>
+    <button id="changed">fireChanged() (external edit)</button>
+    <button id="capture">Call registered capture (slides 1,3)</button>
+    <button id="captureAll">Capture all</button>
+    <button id="failsave">Fail next save</button>
+    <button id="failsend">Fail next send</button>
+    <button id="remount">Dispose + remount</button>
+    <button id="move">Detach + reattach (iframe reload)</button>
+  </div>
+  <div>Remembered: <span id="remembered">-</span> · viewer script loads: <span id="loads">0</span> · disk: <span id="disk">-</span></div>
+  <div id="shots"></div>
+  <div>Log:</div>
+  <pre id="log"></pre>
+  <div>Sent requests (data URLs truncated):</div>
+  <pre id="sent"></pre>
+</div>
+<script type="module">
+import { createSlidesView } from "../src/view.js"
+
+// ---- MOCK viewer: stringified and injected into the iframe by view.js, like dist/viewer.js ----
+function mockViewer() {
+  const COLORS = ["#264653", "#2a9d8f", "#e9c46a", "#f4a261", "#e76f51", "#5e3c99"]
+  const dec = (b) => new TextDecoder().decode(b)
+  const enc = (s) => new TextEncoder().encode(s)
+  let st = null
+
+  function parse(bytes) {
+    // Mock "pptx": "PK MOCKDECK slides=3 rev=1 edits=0"
+    const text = dec(bytes)
+    const num = (k, d) => Number((text.match(new RegExp(k + "=(\\d+)")) || [])[1] ?? d)
+    return { slides: num("slides", 3), rev: num("rev", 1), edits: num("edits", 0) }
+  }
+  const shapesOf = (i) => [
+    { elementId: `s${i}-title`, shapeId: "2", name: "Title 1", type: "text", text: `Slide ${i + 1} title`, box: [6, 6, 88, 16] },
+    { elementId: `s${i}-body`, shapeId: "3", name: "Content Placeholder 2", type: "text", text: "Bullet one\nBullet two\nBullet three", box: [6, 28, 54, 60] },
+    { elementId: `s${i}-pic`, shapeId: "4", name: "Picture 3", type: "image", text: "", box: [64, 28, 30, 60] },
+  ]
+  const item = (i, s) => ({ slide: i + 1, elementId: s.elementId, shapeId: s.shapeId, name: s.name, type: s.type, text: s.text })
+
+  function render() {
+    const { root, doc, opts } = st
+    root.replaceChildren()
+    root.style.cssText = `display:flex;flex-direction:column;height:100%;font:12px system-ui;background:${st.dark ? "#202124" : "#f3f3f3"};color:${st.dark ? "#ddd" : "#222"}`
+    const bar = doc.createElement("div")
+    bar.style.cssText = "display:flex;gap:6px;padding:6px;align-items:center;flex:none"
+    const edit = doc.createElement("button")
+    edit.textContent = "Mock edit (make dirty)"
+    edit.onclick = () => {
+      st.doc_.edits++
+      if (!st.dirty) { st.dirty = true; opts.onDirty?.(true) }
+      render()
+    }
+    const info = doc.createElement("span")
+    info.textContent = `MOCK viewer · rev ${st.doc_.rev} · edits ${st.doc_.edits} · ${st.dirty ? "dirty" : "clean"}`
+    bar.append(edit, info)
+    const strip = doc.createElement("div")
+    strip.style.cssText = "display:flex;gap:4px;padding:0 6px 6px;flex:none;overflow:auto"
+    for (let i = 0; i < st.doc_.slides; i++) {
+      const t = doc.createElement("button")
+      t.textContent = String(i + 1)
+      t.style.cssText = `width:40px;height:24px;border:2px solid ${i === st.active ? "#3b82f6" : "transparent"};background:${COLORS[i % COLORS.length]};color:#fff`
+      t.onclick = () => api.goTo(i)
+      strip.appendChild(t)
+    }
+    const stageWrap = doc.createElement("div")
+    stageWrap.style.cssText = "flex:1;min-height:0;padding:6px;display:flex;align-items:flex-start;justify-content:center"
+    const stage = doc.createElement("div")
+    stage.style.cssText = `position:relative;width:100%;aspect-ratio:16/9;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.3)`
+    stage.setAttribute("aria-label", `Slide ${st.active + 1}`)
+    stage.onclick = (e) => { if (e.target === stage) setSelection([]) }
+    for (const s of shapesOf(st.active)) {
+      const d = doc.createElement("div")
+      const [x, y, w, h] = s.box
+      const sel = st.selection.some((it) => it.elementId === s.elementId)
+      d.style.cssText = `position:absolute;left:${x}%;top:${y}%;width:${w}%;height:${h}%;cursor:pointer;
+        background:${COLORS[st.active % COLORS.length]}33;outline:${sel ? "2px solid #3b82f6" : "1px dashed #999"};padding:4px;overflow:hidden;color:#222`
+      d.textContent = s.text || s.name
+      d.onclick = (e) => {
+        const it = item(st.active, s)
+        if (e.shiftKey) setSelection(sel ? st.selection.filter((x) => x.elementId !== s.elementId) : [...st.selection, it])
+        else setSelection([it])
+      }
+      stage.appendChild(d)
+    }
+    const label = doc.createElement("div")
+    label.style.cssText = "position:absolute;right:6px;bottom:4px;color:#888"
+    label.textContent = `slide ${st.active + 1} · rev ${st.doc_.rev} · edits ${st.doc_.edits}`
+    stage.appendChild(label)
+    stageWrap.appendChild(stage)
+    root.append(bar, strip, stageWrap)
+  }
+
+  function setSelection(items) {
+    st.selection = items
+    st.opts.onSelection?.(items.slice())
+    render()
+  }
+
+  function ready() {
+    setTimeout(() => st && st.opts.onReady?.({ slideCount: st.doc_.slides }), 300)
+  }
+
+  const api = {
+    mount(container, bytes, opts) {
+      st = { root: container, doc: container.ownerDocument, opts: opts || {}, dark: !!opts?.dark, selection: [], dirty: false,
+        doc_: parse(bytes), active: 0 }
+      st.active = Math.min(Math.max(0, opts?.initialSlide || 0), st.doc_.slides - 1)
+      render()
+      ready()
+    },
+    load(bytes, o) {
+      st.doc_ = parse(bytes)
+      st.active = Math.min(Math.max(0, o?.initialSlide || 0), st.doc_.slides - 1)
+      st.selection = []
+      st.opts.onSelection?.([])
+      if (st.dirty) { st.dirty = false; st.opts.onDirty?.(false) }
+      render()
+      ready()
+    },
+    async getContent() {
+      await new Promise((r) => setTimeout(r, 50))
+      const d = st.doc_
+      return enc(`PK MOCKDECK slides=${d.slides} rev=${d.rev} edits=${d.edits}`)
+    },
+    markSaved() { if (st.dirty) { st.dirty = false; st.opts.onDirty?.(false); render() } },
+    isDirty: () => !!st?.dirty,
+    getSlideCount: () => st?.doc_.slides ?? 0,
+    getActiveSlide: () => st?.active ?? 0,
+    goTo(i) {
+      const n = Math.min(Math.max(0, i), st.doc_.slides - 1)
+      if (n === st.active) return
+      st.active = n
+      st.selection = []
+      st.opts.onSelection?.([])
+      st.opts.onSlide?.(n)
+      render()
+    },
+    getSelection: () => (st ? st.selection.slice() : []),
+    async capture(indexes, o) {
+      const width = o?.width || 1280, height = Math.round(width * 9 / 16)
+      const out = []
+      for (const i of indexes) {
+        await new Promise((r) => setTimeout(r, 80))
+        const c = st.doc.createElement("canvas")
+        c.width = width; c.height = height
+        const g = c.getContext("2d")
+        g.fillStyle = "#fff"; g.fillRect(0, 0, width, height)
+        for (const s of shapesOf(i)) {
+          const [x, y, w, h] = s.box
+          g.fillStyle = COLORS[i % COLORS.length]
+          g.fillRect(x / 100 * width, y / 100 * height, w / 100 * width, h / 100 * height)
+          g.fillStyle = "#fff"; g.font = `bold ${Math.round(width / 30)}px sans-serif`
+          g.fillText(s.name, x / 100 * width + 10, y / 100 * height + width / 25)
+        }
+        g.fillStyle = "#333"; g.font = `${Math.round(width / 45)}px sans-serif`
+        g.fillText(`slide ${i + 1} · rev ${st.doc_.rev} · edits ${st.doc_.edits}`, 10, height - 12)
+        out.push(c.toDataURL("image/png"))
+      }
+      return out
+    },
+    setDark(d) { st.dark = !!d; render() },
+    unmount() { st?.root.replaceChildren(); st = null },
+  }
+  window.SlidesApp = api
+}
+const MOCK_VIEWER = "(" + mockViewer.toString() + ")()"
+
+// ---- fake host api ----
+const enc = (s) => new TextEncoder().encode(s)
+const dec = (b) => new TextDecoder().decode(b)
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const logEl = document.getElementById("log")
+const log = (...a) => { logEl.textContent = a.join(" ") + "\n" + logEl.textContent; console.log("[harness]", ...a) }
+const DEFAULT = "C:\\Users\\demo\\Decks\\quarterly review.pptx"
+const disk = new Map([[DEFAULT, { text: "PK MOCKDECK slides=3 rev=1 edits=0", mtime: Date.now() }]])
+const showDisk = () => (document.getElementById("disk").textContent = [...disk].map(([p, f]) => `${p.split("\\").pop()}: ${f.text}`).join(" | "))
+showDisk()
+const listeners = new Set() // { path, cb }
+let captureFn = null
+let failSave = false, failSend = false, scriptLoads = 0
+
+const trunc = (k, v) => (typeof v === "string" && v.startsWith("data:") ? v.slice(0, 40) + `… (${v.length} chars)` : v)
+
+const api = {
+  initialPath: new URLSearchParams(location.search).has("empty") ? null : DEFAULT,
+  async pickDeck() {
+    const p = window.prompt("Deck path (cancel = null)", "C:\\Users\\demo\\Decks\\other deck.pptx")
+    if (p && !disk.has(p)) disk.set(p, { text: "PK MOCKDECK slides=5 rev=1 edits=0", mtime: Date.now() })
+    showDisk()
+    return p || null
+  },
+  async readDeck(path) {
+    await sleep(150)
+    const f = disk.get(path)
+    if (!f) throw new Error("Deck not found: " + path)
+    log("readDeck", path)
+    return { bytes: enc(f.text), mtime: f.mtime }
+  },
+  async writeDeck(path, bytes) {
+    await sleep(200)
+    if (failSave) { failSave = false; throw new Error("Mock write failure (EBUSY)") }
+    const text = dec(bytes)
+    if (!text.startsWith("PK")) throw new Error("not a zip")
+    disk.set(path, { text, mtime: Date.now() })
+    log("writeDeck", path, JSON.stringify(text), "instanceof Uint8Array:", bytes instanceof Uint8Array)
+    showDisk()
+    return { mtime: Date.now() }
+  },
+  onChanged(path, cb) {
+    const entry = { path, cb }
+    listeners.add(entry)
+    log("onChanged subscribe", path)
+    return () => { listeners.delete(entry); log("onChanged unsubscribe", path) }
+  },
+  async loadViewerScript() {
+    await sleep(200)
+    document.getElementById("loads").textContent = String(++scriptLoads)
+    return MOCK_VIEWER
+  },
+  async send(request) {
+    await sleep(300)
+    if (failSend) { failSend = false; throw new Error("Mock send failure") }
+    document.getElementById("sent").textContent = JSON.stringify(request, trunc, 2) + "\n\n" + document.getElementById("sent").textContent
+  },
+  remember(path) { document.getElementById("remembered").textContent = path },
+  registerCapture(fn) {
+    captureFn = fn
+    log("registerCapture")
+    return () => { if (captureFn === fn) captureFn = null; log("unregisterCapture") }
+  },
+  dark: () => document.body.classList.contains("dark"),
+}
+
+// External edit of every open deck: bump rev (and alternate the slide count) on "disk", then notify.
+window.fireChanged = () => {
+  for (const { path } of listeners) {
+    const f = disk.get(path)
+    if (!f) continue
+    const m = f.text.match(/slides=(\d+) rev=(\d+)/)
+    const rev = Number(m[2]) + 1
+    f.text = `PK MOCKDECK slides=${rev % 2 ? 3 : 4} rev=${rev} edits=0`
+    f.mtime = Date.now()
+  }
+  showDisk()
+  for (const { cb } of [...listeners]) cb()
+}
+
+async function callCapture(slides) {
+  const shots = document.getElementById("shots")
+  if (!captureFn) return log("no capture registered")
+  try {
+    // Upper-cased path: the view must match case-insensitively on Windows.
+    const urls = await captureFn(DEFAULT.toUpperCase(), slides)
+    log("capture ->", urls.length, "images")
+    shots.replaceChildren(...urls.map((u) => Object.assign(document.createElement("img"), { src: u })))
+  } catch (err) {
+    log("capture error:", err.message)
+  }
+}
+
+const panel = document.getElementById("panel")
+let view = createSlidesView(api)
+panel.appendChild(view.element)
+window.view = view
+window.api = api
+
+document.getElementById("dark").onclick = () => document.body.classList.toggle("dark")
+document.getElementById("changed").onclick = () => window.fireChanged()
+document.getElementById("capture").onclick = () => callCapture([1, 3])
+document.getElementById("captureAll").onclick = () => callCapture([])
+document.getElementById("failsave").onclick = () => { failSave = true }
+document.getElementById("failsend").onclick = () => { failSend = true }
+document.getElementById("remount").onclick = () => {
+  view.dispose()
+  log("listeners after dispose:", listeners.size, "capture registered:", !!captureFn)
+  view = createSlidesView(api)
+  panel.appendChild(view.element)
+  window.view = view
+}
+document.getElementById("move").onclick = () => {
+  const e = view.element
+  e.remove()
+  setTimeout(() => panel.appendChild(e), 100)
+}
+</script>
+</body>
+</html>
