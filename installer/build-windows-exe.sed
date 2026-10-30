@@ -1,0 +1,29 @@
+[Version]
+Class=IEXPRESS
+SEDVersion=3
+[Options]
+PackagePurpose=InstallApp
+ShowInstallProgramWindow=0
+HideExtractAnimation=1
+UseLongFileName=1
+InsideCompressed=0
+CAB_FixedSize=0
+CAB_ResvCodeSigning=0
+RebootMode=N
+InstallPrompt=
+DisplayLicense=
+FinishMessage=
+TargetName=%TargetName%
+FriendlyName=OpenCode + Slides Plugin Installer
+AppLaunched=cmd /c install-windows.cmd
+PostInstallCmd=<None>
+AdminQuietInstCmd=
+UserQuietInstCmd=
+SourceFiles=SourceFiles
+[Strings]
+TargetName=OpenCode-Slides-Setup.exe
+[SourceFiles]
+SourceFiles0=.
+[SourceFiles0]
+install-windows.cmd=
+install-windows.ps1=
