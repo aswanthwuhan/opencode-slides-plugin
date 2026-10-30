@@ -133,6 +133,22 @@ Browser test pages (serve this folder over http, for example `python -m http.ser
 | `src/prompt.js`, `src/ipc.js`, `src/rpc.js` | Message builder and window/main/server contracts |
 | `render/deck.py` | `.pptx` → PNGs + shape boxes (LibreOffice + python-pptx + PyMuPDF) |
 
+## Thanks
+
+This plugin stands on the work of many people. Thank you to:
+
+- **The OpenCode team** — for [OpenCode](https://opencode.ai), its desktop app and its plugin API.
+- **The `pptx-react-viewer` and `ooxml-ui` / `ooxml-core` authors and contributors** — for the PowerPoint viewer and editor
+  that runs inside the panel ([pptx-react-viewer](https://www.npmjs.com/package/pptx-react-viewer), Apache-2.0).
+- **The open-source libraries bundled in `dist/viewer.js`** — React, Lit, Lucide, react-icons, i18next / react-i18next,
+  jsPDF, html2canvas, JSZip, fflate, pako, fast-xml-parser, xmldom, DOMPurify, canvg, opentype.js, Yjs and lib0,
+  ProseMirror, Framer Motion, three.js, core-js, Babel runtime and the many small utilities they depend on. Every one of
+  them and its license is listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+- **The tools behind the screenshot fallback and the build** — [LibreOffice](https://www.libreoffice.org),
+  [python-pptx](https://github.com/scanny/python-pptx), [PyMuPDF](https://github.com/pymupdf/PyMuPDF),
+  [Bun](https://bun.sh) and [Node.js](https://nodejs.org).
+- **[Anthropic's Claude](https://www.anthropic.com/claude)** — which helped design, write and test this plugin.
+
 ## License
 
 MIT — see [LICENSE](LICENSE). `dist/viewer.js` bundles third-party packages under their own licenses; see
